@@ -1,751 +1,243 @@
-import React, {
-  useEffect,
-  useState,
-} from 'react';
-
-import Map, {
-  Marker,
-  Popup,
-  NavigationControl,
-} from 'react-map-gl/maplibre';
-
+import React, { useEffect, useState, useMemo } from 'react';
+import DeckGL from '@deck.gl/react';
+import { Map, Popup, NavigationControl } from 'react-map-gl/maplibre';
+import { ScatterplotLayer, LineLayer, TextLayer, PathLayer } from '@deck.gl/layers';
+import { MapPin, FastForward } from 'lucide-react';
 import 'maplibre-gl/dist/maplibre-gl.css';
 
-import {
-  Plane,
-  Truck,
-  MapPin,
-} from 'lucide-react';
+import { getVehicleColor } from './ManageFleetPage';
 
-import {
-  getVehicleColor,
-} from './ManageFleetPage';
+const Z_EXAGGERATION = 8;
+const MAX_MAP_PITCH = 85;
 
+function hexToRgb(hex) {
+  if (!hex) return [0, 229, 255];
+  hex = hex.replace('#', '');
+  if (hex.length === 3) hex = hex.split('').map(c => c + c).join('');
+  const int = parseInt(hex, 16);
+  return [(int >> 16) & 255, (int >> 8) & 255, int & 255];
+}
 
-/* =========================================================
-   MAP COMPONENT
-   ========================================================= */
+const osmRasterStyle = {
+  version: 8,
+  sources: {
+    osm: {
+      type: 'raster',
+      tiles: [
+        'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
+        'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png'
+      ],
+      tileSize: 256,
+      attribution: '&copy; OpenStreetMap Contributors'
+    }
+  },
+  layers: [{ id: 'osm', type: 'raster', source: 'osm', minzoom: 0, maxzoom: 19 }],
+};
 
 export default function FleetMap({
-  telemetryData,
-  vehicleById,
-  theme,
-  selectedVehicle,
-  setSelectedVehicle,
-  activeTraces,
-
-  /*
-   * CAMERA CONTROLLED BY PARENT
-   */
-  pitch,
-  bearing,
-  setPitch,
-  setBearing,
+  telemetryData, vehicleById, theme, selectedVehicle, setSelectedVehicle,
+  activeTraces, viewState, setViewState, showMapTiles,
+  onMapInteract, onVehicleClick,
+  showAllManifests, dbTraffic, viewingManifestId
 }) {
+  const isDark = theme === 'dark';
+  const textColor = isDark ? '#fff' : '#111';
+  const subtextColor = isDark ? '#888' : '#555';
+  const borderColor = isDark ? 'rgba(255,255,255,0.08)' : 'rgba(0,0,0,0.1)';
 
-  /* =======================================================
-     GEOGRAPHIC CAMERA STATE
-
-     Only longitude / latitude / zoom
-     live here.
-
-     Pitch + bearing live in the
-     parent component.
-     ======================================================= */
-
-  const [
-    viewState,
-    setViewState,
-  ] = useState({
-    longitude:
-      -122.4194,
-
-    latitude:
-      37.7749,
-
-    zoom:
-      15,
-  });
-
-
-  const [
-    history,
-    setHistory,
-  ] = useState({});
-
-
-  /* =======================================================
-     FOLLOW SELECTED VEHICLE
-     ======================================================= */
+  const [history, setHistory] = useState({});
+  const [hoverInfo, setHoverInfo] = useState(null);
 
   useEffect(() => {
-    if (
-      selectedVehicle &&
-      telemetryData[
-        selectedVehicle
-      ]
-    ) {
-      const selected =
-        telemetryData[
-          selectedVehicle
-        ];
+    setHistory(prev => {
+      const next = { ...prev };
+      Object.values(telemetryData).forEach(position => {
+        const vehicleId = position.vehicle_id;
+        if (!vehicleId) return;
+        if (!next[vehicleId]) next[vehicleId] = [];
 
-      setViewState(
-        (prev) => ({
-          ...prev,
+        const altitude = Number(position.altitude) || 0;
+        const last = next[vehicleId][next[vehicleId].length - 1];
 
-          longitude:
-            selected.longitude,
-
-          latitude:
-            selected.latitude,
-
-          /*
-           * react-map-gl supports
-           * transitionDuration as a
-           * camera transition property.
-           */
-          transitionDuration:
-            1200,
-        })
-      );
-    }
-  }, [
-    selectedVehicle,
-    telemetryData,
-  ]);
-
-
-  /* =======================================================
-     BUILD VEHICLE HISTORY / TRACE
-     ======================================================= */
-
-  useEffect(() => {
-    setHistory((prev) => {
-      const next = {
-        ...prev,
-      };
-
-      Object.values(
-        telemetryData
-      ).forEach((position) => {
-        const vehicleId =
-          position.vehicle_id;
-
-        if (!next[vehicleId]) {
-          next[vehicleId] = [];
-        }
-
-        const altitude =
-          position.altitude || 0;
-
-        const last =
-          next[vehicleId][
-            next[vehicleId].length - 1
-          ];
-
-
-        if (
-          !last ||
-          last.lng !==
-            position.longitude ||
-          last.lat !==
-            position.latitude ||
-          last.alt !==
-            altitude
-        ) {
-          next[vehicleId] = [
-            ...next[vehicleId],
-
-            {
-              lng:
-                position.longitude,
-
-              lat:
-                position.latitude,
-
-              alt:
-                altitude,
-            },
-          ];
-
-
-          if (
-            next[vehicleId].length >
-            40
-          ) {
-            next[vehicleId].shift();
-          }
+        if (!last || last.lng !== position.longitude || last.lat !== position.latitude || last.alt !== altitude) {
+          next[vehicleId] = [...next[vehicleId], { lng: position.longitude, lat: position.latitude, alt: altitude }];
+          if (next[vehicleId].length > 40) next[vehicleId].shift();
         }
       });
-
       return next;
     });
-  }, [
-    telemetryData,
-  ]);
+  }, [telemetryData]);
 
+  const is2D = viewState.pitch === 0;
+  const isLOD = viewState.zoom < 13.5;
 
-  /* =======================================================
-     OSM MAP STYLE
-     ======================================================= */
+  const vehicleData = useMemo(() => {
+    return Object.values(telemetryData).map(pos => {
+      const vehicle = vehicleById[pos.vehicle_id];
+      if (!vehicle) return null;
+      const alt = Number(pos.altitude) || 0;
+      const isAirborne = alt > 0;
+      const mult = vehicle.dangerZoneMultiplier !== undefined ? vehicle.dangerZoneMultiplier : 10;
+      const dangerRadius = Math.max(10, (pos.calculatedSpeed || 0) * mult);
 
-  const mapStyle = {
-    version: 8,
+      return {
+        id: pos.vehicle_id,
+        name: vehicle.name,
+        pos: [pos.longitude, pos.latitude, is2D ? 0 : alt * Z_EXAGGERATION],
+        groundPos: [pos.longitude, pos.latitude, 0],
+        baseAlt: alt,
+        calculatedSpeed: pos.calculatedSpeed || 0,
+        dangerRadius: dangerRadius,
+        isAirborne,
+        color: hexToRgb(getVehicleColor(pos.vehicle_id))
+      };
+    }).filter(Boolean);
+  }, [telemetryData, vehicleById, is2D]);
 
-    sources: {
-      osm: {
-        type:
-          'raster',
+  const traceData = useMemo(() => {
+    const data = [];
+    Object.keys(activeTraces || {}).forEach(vId => {
+      if (!activeTraces[vId] || !history[vId]) return;
+      const rgb = hexToRgb(getVehicleColor(vId));
+      const len = history[vId].length;
+      history[vId].forEach((pt, i) => {
+        const opacity = 0.4 + 0.6 * ((i + 1) / len);
+        data.push({ pos: [pt.lng, pt.lat, is2D ? 0 : pt.alt * Z_EXAGGERATION], color: [...rgb, opacity * 255] });
+      });
+    });
+    return data;
+  }, [activeTraces, history, is2D]);
 
-        tiles: [
-          'https://a.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          'https://b.tile.openstreetmap.org/{z}/{x}/{y}.png',
-          'https://c.tile.openstreetmap.org/{z}/{x}/{y}.png',
-        ],
+  const layers = [
+    // Renders the chunked manifests. Highlights the one selected from the Dropdown.
+    showAllManifests && new PathLayer({
+      id: 'all-manifests-paths',
+      data: dbTraffic.filter(p => p.path && p.path.length > 1),
+      getPath: d => d.path.map(pt => [pt.longitude, pt.latitude, is2D ? 2 : Math.max(pt.altitude || 0, 0.2) * Z_EXAGGERATION]),
+      getColor: d => d.manifestId === viewingManifestId ? [0, 255, 128, 255] : [0, 229, 255, 180],
+      getWidth: d => d.manifestId === viewingManifestId ? 6 : 4,
+      widthUnits: 'pixels',
+      pickable: true,
+      autoHighlight: true,
+      highlightColor: [0, 255, 128, 255],
+      onHover: info => setHoverInfo(info)
+    }),
 
-        tileSize:
-          256,
+    traceData.length > 0 && new ScatterplotLayer({
+      id: 'history-traces', data: traceData, getPosition: d => d.pos,
+      getFillColor: d => d.color, getRadius: 6, radiusUnits: 'pixels', updateTriggers: { getFillColor: [traceData] }
+    }),
 
-        attribution:
-          '&copy; OpenStreetMap Contributors',
-      },
-    },
+    !is2D && !isLOD && new LineLayer({
+      id: 'vertical-drop-lines', data: vehicleData.filter(v => v.isAirborne),
+      getSourcePosition: d => d.groundPos, getTargetPosition: d => d.pos,
+      getColor: [255, 255, 255, 120], getWidth: 1.5, widthUnits: 'pixels'
+    }),
 
-    layers: [
-      {
-        id:
-          'osm',
+    // GROUND ZONES: billboard: false (lays flat on map)
+    new ScatterplotLayer({
+      id: 'ground-danger-zones', data: vehicleData.filter(v => !v.isAirborne),
+      getPosition: d => d.pos, getFillColor: [255, 59, 48, 30], getLineColor: [255, 59, 48, 120],
+      stroked: true, lineWidthMinPixels: 2, billboard: false,
+      getRadius: d => d.dangerRadius, radiusUnits: 'meters', radiusMinPixels: 15
+    }),
 
-        type:
-          'raster',
+    // AIRBORNE ZONES: billboard: true (creates 3D Sphere effect, never tears the map)
+    new ScatterplotLayer({
+      id: 'airborne-danger-zones', data: vehicleData.filter(v => v.isAirborne),
+      getPosition: d => d.pos, getFillColor: [255, 59, 48, 30], getLineColor: [255, 59, 48, 120],
+      stroked: true, lineWidthMinPixels: 2, billboard: true,
+      getRadius: d => d.dangerRadius, radiusUnits: 'meters', radiusMinPixels: 15
+    }),
 
-        source:
-          'osm',
+    selectedVehicle && new ScatterplotLayer({
+      id: 'selected-highlight', data: vehicleData.filter(v => v.id === selectedVehicle),
+      getPosition: d => d.pos, getFillColor: [0, 229, 255, 100], getLineColor: [0, 229, 255, 255],
+      stroked: true, lineWidthMinPixels: 2, billboard: false, getRadius: 24, radiusUnits: 'pixels'
+    }),
 
-        minzoom:
-          0,
+    // 2D VEHICLE ICONS
+    new ScatterplotLayer({
+      id: 'vehicle-marker-glyphs', data: vehicleData, getPosition: d => d.pos,
+      getFillColor: d => d.color, getLineColor: [255, 255, 255, 255],
+      lineWidthMinPixels: 2, stroked: true, billboard: false, pickable: true,
+      getRadius: d => d.id === selectedVehicle ? 11 : 8, radiusUnits: 'pixels',
+      onClick: ({ object }) => { if (object && onVehicleClick) onVehicleClick(object.id); },
+      updateTriggers: { getRadius: [selectedVehicle] }
+    }),
 
-        maxzoom:
-          19,
-      },
-    ],
+    !isLOD && new TextLayer({
+      id: 'vehicle-labels', data: vehicleData, getPosition: d => [d.pos[0], d.pos[1], d.pos[2] + 20],
+      getText: d => `${d.name} ${d.baseAlt > 0 ? d.baseAlt.toFixed(1) + 'm' : ''}`,
+      getSize: 11, getColor: [255, 255, 255], getBackgroundColor: [18, 18, 22, 230],
+      getBorderColor: d => [...d.color, 255], getBorderWidth: 1, background: true,
+      backgroundPadding: [4, 4], pixelOffset: [0, -20], fontFamily: 'system-ui, sans-serif',
+      fontWeight: 'bold', outlineWidth: 2, outlineColor: [0, 0, 0, 255],
+    })
+  ].filter(Boolean);
+
+  const renderTooltip = () => {
+    if (!hoverInfo || !hoverInfo.object || !showAllManifests) return null;
+    const { path, manifestId, vehicleId, name } = hoverInfo.object;
+    if (!path || path.length === 0) return null;
+
+    const start = new Date(path[0].timestamp).toLocaleTimeString();
+    const end = new Date(path[path.length - 1].timestamp).toLocaleTimeString();
+    const vehicleName = vehicleById[vehicleId]?.name || vehicleId;
+
+    return (
+      <div style={{ position: 'absolute', zIndex: 9999, left: hoverInfo.x + 15, top: hoverInfo.y + 15, background: isDark ? 'rgba(18, 18, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)', color: textColor, border: `1px solid ${borderColor}`, padding: '12px', borderRadius: '8px', fontSize: '11px', boxShadow: '0 8px 24px rgba(0,0,0,0.3)', backdropFilter: 'blur(10px)', pointerEvents: 'none' }}>
+        <div style={{ fontWeight: '800', color: '#00E5FF', marginBottom: '6px', fontSize: '12px', textTransform: 'uppercase' }}>{name}</div>
+        <div style={{ color: subtextColor, marginBottom: '8px', fontSize: '9px', fontFamily: 'monospace' }}>ID: {manifestId}</div>
+        <div style={{ display: 'grid', gridTemplateColumns: 'auto 1fr', gap: '4px 12px' }}>
+          <span style={{ color: subtextColor }}>Vehicle:</span><strong style={{ textAlign: 'right' }}>{vehicleName}</strong>
+          <span style={{ color: subtextColor }}>Start:</span><strong style={{ textAlign: 'right' }}>{start}</strong>
+          <span style={{ color: subtextColor }}>End:</span><strong style={{ textAlign: 'right' }}>{end}</strong>
+        </div>
+      </div>
+    );
   };
 
-
-  /* =======================================================
-     THEME
-     ======================================================= */
-
-  const isDark =
-    theme === 'dark';
-
-  const textColor =
-    isDark
-      ? '#fff'
-      : '#111';
-
-  const subtextColor =
-    isDark
-      ? '#888'
-      : '#555';
-
-  const borderColor =
-    isDark
-      ? 'rgba(255,255,255,0.08)'
-      : 'rgba(0,0,0,0.1)';
-
-
-  /* =======================================================
-     MAP
-     ======================================================= */
-
   return (
-    <div
-      style={{
-        width:
-          '100%',
-
-        height:
-          '100%',
-
-        position:
-          'relative',
-      }}
-    >
-
-      <Map
-        {...viewState}
-
-        /*
-         * IMPORTANT:
-         *
-         * These are controlled
-         * directly by the parent.
-         */
-        pitch={pitch}
-        bearing={bearing}
-
-        onMove={(event) => {
-          const next =
-            event.viewState;
-
-
-          /*
-           * Geographic camera state.
-           */
-
-          setViewState({
-            longitude:
-              next.longitude,
-
-            latitude:
-              next.latitude,
-
-            zoom:
-              next.zoom,
-          });
-
-
-          /*
-           * Camera orientation state.
-           *
-           * This keeps the HUD
-           * synchronized when the
-           * user manually rotates
-           * or pitches the map.
-           */
-
-          setPitch(
-            next.pitch
-          );
-
-          setBearing(
-            next.bearing
-          );
+    <div style={{ width: '100%', height: '100%', position: 'relative' }}>
+      <DeckGL
+        viewState={viewState} controller={{ dragRotate: true, scrollZoom: true, doubleClickZoom: false }}
+        onViewStateChange={({ viewState: nextViewState, interactionState }) => {
+          if (interactionState && (interactionState.isDragging || interactionState.isPanning || interactionState.isRotating || interactionState.isZooming)) {
+            if (onMapInteract) onMapInteract();
+          }
+          setViewState(prev => ({ ...nextViewState, pitch: Math.max(0, Math.min(MAX_MAP_PITCH, nextViewState.pitch)) }));
         }}
-
-        mapStyle={
-          mapStyle
-        }
-
-        style={{
-          width:
-            '100%',
-
-          height:
-            '100%',
+        layers={layers}
+        onClick={(info) => {
+          if (!info.object) {
+             setSelectedVehicle(null);
+             if (onMapInteract) onMapInteract();
+          }
         }}
+        getCursor={({ isDragging, isHovering }) => isDragging ? 'grabbing' : isHovering ? 'pointer' : 'grab'}
       >
-
-        {/* =================================================
-            MAP NAVIGATION
-           ================================================= */}
-
-        <NavigationControl
-          position="top-left"
-          visualizePitch={
-            true
-          }
-        />
-
-
-        {/* =================================================
-            TRACE DOTS
-           ================================================= */}
-
-        {Object.keys(
-          activeTraces || {}
-        ).map((vehicleId) => {
-
-          if (
-            !activeTraces[
-              vehicleId
-            ] ||
-            !history[
-              vehicleId
-            ]
-          ) {
-            return null;
-          }
-
-
-          const color =
-            getVehicleColor(
-              vehicleId
-            );
-
-
-          return history[
-            vehicleId
-          ].map(
-            (
-              point,
-              index
-            ) => {
-
-              const opacity =
-                0.4 +
-                0.6 *
-                  (
-                    (index + 1) /
-                    history[
-                      vehicleId
-                    ].length
-                  );
-
-
-              return (
-                <Marker
-                  key={`${vehicleId}-trace-${index}`}
-                  longitude={
-                    point.lng
-                  }
-                  latitude={
-                    point.lat
-                  }
-                  anchor="center"
-                >
-
-                  <div
-                    style={{
-                      width:
-                        '6px',
-
-                      height:
-                        '6px',
-
-                      borderRadius:
-                        '50%',
-
-                      background:
-                        color,
-
-                      opacity:
-
-                        opacity,
-
-                      transform:
-                        `translateY(-${point.alt}px)`,
-
-                      boxShadow:
-                        `0 0 6px ${color}80`,
-
-                      filter:
-                        'brightness(0.75)',
-                    }}
-                  />
-
-                </Marker>
-              );
-            }
-          );
-        })}
-
-
-        {/* =================================================
-            LIVE VEHICLE MARKERS
-           ================================================= */}
-
-        {Object.values(
-          telemetryData
-        ).map((position) => {
-
-          const vehicle =
-            vehicleById[
-              position.vehicle_id
-            ];
-
-
-          if (!vehicle) {
-            return null;
-          }
-
-
-          const isGround =
-            vehicle.category ===
-            'GROUND';
-
-
-          const altitude =
-            isGround
-              ? 0
-              : (
-                  position.altitude ||
-                  50
-                );
-
-
-          const color =
-            getVehicleColor(
-              position.vehicle_id
-            );
-
-
-          return (
-            <Marker
-              key={
-                position.vehicle_id
-              }
-
-              longitude={
-                position.longitude
-              }
-
-              latitude={
-                position.latitude
-              }
-
-              anchor="bottom"
-
-              onClick={(event) => {
-                event
-                  .originalEvent
-                  .stopPropagation();
-
-                setSelectedVehicle(
-                  vehicle.id
-                );
-              }}
-            >
-
-              <div
-                style={{
-                  display:
-                    'flex',
-
-                  flexDirection:
-                    'column',
-
-                  alignItems:
-                    'center',
-                }}
-              >
-
-                {/* VEHICLE ICON */}
-
-                <div
-                  style={{
-                    background:
-                      color,
-
-                    color:
-                      '#000',
-
-                    borderRadius:
-                      '8px',
-
-                    padding:
-                      '6px',
-
-                    boxShadow:
-                      `0 0 15px ${color}`,
-
-                    transform:
-                      `translateY(-${altitude}px)`,
-
-                    transition:
-                      'transform 0.3s ease-out',
-                  }}
-                >
-
-                  {isGround ? (
-                    <Truck
-                      size={14}
-                    />
-                  ) : (
-                    <Plane
-                      size={14}
-                    />
-                  )}
-
+        {showMapTiles && (
+          <Map mapStyle={osmRasterStyle} reuseMaps>
+            <NavigationControl position="top-left" visualizePitch={true} />
+            {selectedVehicle && telemetryData[selectedVehicle] && (
+              <Popup longitude={telemetryData[selectedVehicle].longitude} latitude={telemetryData[selectedVehicle].latitude} anchor="top" offset={[0, 10]} onClose={() => { setSelectedVehicle(null); if (onMapInteract) onMapInteract(); }} closeButton={false} className="webgl-popup">
+                <div style={{ background: isDark ? 'rgba(18, 18, 22, 0.95)' : 'rgba(255, 255, 255, 0.95)', color: textColor, border: `1px solid ${borderColor}`, padding: '12px', borderRadius: '12px', display: 'flex', flexDirection: 'column', gap: '8px', boxShadow: '0 8px 24px rgba(0,0,0,0.2)', backdropFilter: 'blur(10px)' }}>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '20px' }}>
+                    <b style={{ fontSize: '13px' }}>{vehicleById[selectedVehicle]?.name || selectedVehicle}</b>
+                    <div style={{ display: 'flex', gap: '10px' }}>
+                      <span style={{ fontSize: '12px', color: subtextColor, display: 'flex', alignItems: 'center', gap: '4px' }}><MapPin size={11} strokeWidth={2} />{Number(telemetryData[selectedVehicle].altitude || 0).toFixed(1)}m</span>
+                      <span style={{ fontSize: '12px', color: '#ff3b30', display: 'flex', alignItems: 'center', gap: '4px' }}><FastForward size={11} strokeWidth={2} />{Number(telemetryData[selectedVehicle].calculatedSpeed || 0).toFixed(1)} m/s</span>
+                    </div>
+                  </div>
                 </div>
-
-
-                {/* ALTITUDE LINE */}
-
-                <div
-                  style={{
-                    width:
-                      '2px',
-
-                    height:
-                      `${altitude}px`,
-
-                    background:
-                      `linear-gradient(to bottom, ${color}, transparent)`,
-
-                    transition:
-                      'height 0.3s ease-out',
-                  }}
-                />
-
-
-                {/* GROUND SHADOW */}
-
-                <div
-                  style={{
-                    width:
-                      '12px',
-
-                    height:
-                      '4px',
-
-                    background:
-                      'rgba(0,0,0,0.6)',
-
-                    borderRadius:
-                      '50%',
-
-                    boxShadow:
-                      '0 0 4px rgba(0,0,0,0.8)',
-                  }}
-                />
-
-              </div>
-
-            </Marker>
-          );
-        })}
-
-
-        {/* =================================================
-            VEHICLE POPUP
-           ================================================= */}
-
-        {selectedVehicle &&
-          telemetryData[
-            selectedVehicle
-          ] && (
-
-            <Popup
-              longitude={
-                telemetryData[
-                  selectedVehicle
-                ].longitude
-              }
-
-              latitude={
-                telemetryData[
-                  selectedVehicle
-                ].latitude
-              }
-
-              anchor="top"
-
-              onClose={() =>
-                setSelectedVehicle(
-                  null
-                )
-              }
-
-              closeButton={
-                false
-              }
-            >
-
-              <div
-                className="map-popup"
-                style={{
-                  background:
-                    isDark
-                      ? '#222'
-                      : '#fff',
-
-                  color:
-                    textColor,
-
-                  border:
-                    `1px solid ${borderColor}`,
-
-                  padding:
-                    '12px',
-
-                  borderRadius:
-                    '12px',
-
-                  display:
-                    'flex',
-
-                  flexDirection:
-                    'column',
-
-                  gap:
-                    '8px',
-                }}
-              >
-
-                <div
-                  style={{
-                    display:
-                      'flex',
-
-                    justifyContent:
-                      'space-between',
-
-                    alignItems:
-                      'center',
-
-                    gap:
-                      '20px',
-                  }}
-                >
-
-                  <b
-                    style={{
-                      fontSize:
-                        '13px',
-                    }}
-                  >
-                    {
-                      vehicleById[
-                        selectedVehicle
-                      ]?.name
-                    }
-                  </b>
-
-
-                  <span
-                    style={{
-                      fontSize:
-                        '12px',
-
-                      color:
-                        subtextColor,
-
-                      display:
-                        'flex',
-
-                      alignItems:
-                        'center',
-
-                      gap:
-                        '4px',
-                    }}
-                  >
-
-                    <MapPin
-                      size={11}
-                      strokeWidth={2}
-                    />
-
-                    {
-                      telemetryData[
-                        selectedVehicle
-                      ].altitude
-                    }m
-
-                  </span>
-
-                </div>
-
-              </div>
-
-            </Popup>
-          )}
-
-      </Map>
-
+              </Popup>
+            )}
+          </Map>
+        )}
+      </DeckGL>
+      {renderTooltip()}
     </div>
   );
 }

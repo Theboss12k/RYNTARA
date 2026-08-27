@@ -420,3 +420,17 @@ input, select { font-family: inherit; }
   .command-bar-wrap { width: 92%; bottom: 20px; }
   .tile-grid { flex-direction: column; align-items: center; }
 }
+:root {
+  --dot-color: rgba(0, 0, 0, 0.08); /* Dark dots for Light Mode */
+}
+
+.dark {
+  --dot-color: rgba(255, 255, 255, 0.08); /* Light dots for Dark Mode */
+}
+
+/* Apply this to your main app container or body */
+body, .app-shell {
+  background-image: radial-gradient(var(--dot-color) 1px, transparent 1px);
+  background-size: 24px 24px;
+  background-position: 0 0;
+}
