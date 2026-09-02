@@ -1,0 +1,917 @@
+package com.fleetapp.controller;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fleetapp.config.GroundStationProcessManager;
+import com.fleetapp.config.GroundStationProcessManager.PersistedMount;
+import com.fleetapp.config.GroundStationProcessManager.PortConflictException;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.MediaType;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.ResponseBodyEmitter;
+
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.nio.file.Paths;
+import java.util.*;
+
+@RestController
+@RequestMapping("/api/discovery")
+@CrossOrigin(origins = "*")
+public class DiscoveryController {
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    @Autowired
+    private GroundStationProcessManager groundStationProcessManager;
+
+    @GetMapping("/adapters")
+    public ResponseEntity<List<String>> getAdapters() {
+        try {
+            Path adapterDir = Paths.get(System.getProperty("user.dir"), "Python_Files", "Python_Codes", "Vehicle_Adapters");
+            List<String> adapters = new ArrayList<>();
+            if (Files.exists(adapterDir)) {
+                try (var stream = Files.list(adapterDir)) {
+                    stream.filter(Files::isRegularFile)
+                            .map(p -> p.getFileName().toString())
+                            .filter(name -> name.endsWith(".py") && !name.startsWith("."))
+                            .forEach(adapters::add);
+                }
+            }
+            return ResponseEntity.ok(adapters);
+        } catch (Exception e) {
+            return ResponseEntity.ok(Collections.emptyList());
+        }
+    }
+
+    /** Which ports are currently bound and by which adapter - lets the UI steer clear of conflicts up front. */
+    @GetMapping("/mounts")
+    public ResponseEntity<List<PersistedMount>> getMounts() {
+        return ResponseEntity.ok(groundStationProcessManager.listActiveMounts());
+    }
+
+    @GetMapping("/configs")
+    public ResponseEntity<List<Map<String, Object>>> getConfigs() {
+        try {
+            Path path = Paths.get(System.getProperty("user.dir"), "vehicle_configs.json");
+            if (Files.exists(path)) {
+                List<Map<String, Object>> configs = objectMapper.readValue(path.toFile(), new TypeReference<List<Map<String, Object>>>() {});
+                return ResponseEntity.ok(configs);
+            }
+            return ResponseEntity.ok(Collections.emptyList());
+        } catch (Exception e) {
+            return ResponseEntity.ok(Collections.emptyList());
+        }
+    }
+
+    @PostMapping("/configs")
+    public ResponseEntity<?> saveVehicleConfig(@RequestBody Map<String, Object> payload) {
+        try {
+            Path path = Paths.get(System.getProperty("user.dir"), "vehicle_configs.json");
+            List<Map<String, Object>> configs = new ArrayList<>();
+
+            if (Files.exists(path)) {
+                configs = objectMapper.readValue(path.toFile(), new TypeReference<List<Map<String, Object>>>() {});
+            }
+
+            String vehicleId = (String) payload.get("id");
+            configs.removeIf(c -> vehicleId != null && vehicleId.equals(c.get("id")));
+            configs.add(payload);
+
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(path.toFile(), configs);
+            return ResponseEntity.ok(Map.of("status", "success"));
+
+        } catch (Exception e) {
+            return ResponseEntity.status(500).body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    /**
+     * Registration-phase scan.
+     *
+     * Body: { "adapter": "drone_adapter.py", "port": 14550, "idPattern": "UAV-SQD7-.*" (optional) }
+     *
+     * Flow, matching the required registration sequence:
+     *   1. Use the SELECTED adapter, bound to the SPECIFIED port (ensureMountRunning - reuses
+     *      an already-running mount for that exact adapter+port, or refuses with a clear
+     *      conflict if the port belongs to a different adapter).
+     *   2. Listen briefly and collect the vehicle names/IDs that adapter has actually seen on
+     *      that port.
+     *   3. Compare those IDs against the database (Postgres `vehicle` table), not just the
+     *      local JSON cache, so "already registered" reflects the real source of truth.
+     */
+    @PostMapping(value = "/scan", produces = MediaType.TEXT_EVENT_STREAM_VALUE)
+    public ResponseBodyEmitter scanSpectrum(@RequestBody Map<String, Object> request) {
+        ResponseBodyEmitter emitter = new ResponseBodyEmitter(60000L);
+
+        String adapter = (String) request.get("adapter");
+        Object portObj = request.get("port");
+
+        new Thread(() -> {
+            try {
+                if (adapter == null || adapter.isBlank()) {
+                    emitter.send(">> ERROR: no adapter selected.\n");
+                    emitter.completeWithError(new IllegalArgumentException("adapter is required"));
+                    return;
+                }
+                if (portObj == null) {
+                    emitter.send(">> ERROR: no port specified. Every adapter mount needs an explicit port.\n");
+                    emitter.completeWithError(new IllegalArgumentException("port is required"));
+                    return;
+                }
+
+                int port;
+                try {
+                    port = Integer.parseInt(String.valueOf(portObj));
+                } catch (NumberFormatException e) {
+                    emitter.send(">> ERROR: port must be a number.\n");
+                    emitter.completeWithError(e);
+                    return;
+                }
+
+                emitter.send(">> Mounting adapter '" + adapter + "' on port " + port + "...\n");
+
+                try {
+                    groundStationProcessManager.ensureMountRunning(adapter, port);
+                } catch (PortConflictException pce) {
+                    // Distinct, greppable prefix so the frontend can show a dedicated conflict message.
+                    emitter.send(">> PORT_CONFLICT: " + pce.getMessage() + "\n");
+                    emitter.completeWithError(pce);
+                    return;
+                }
+
+                emitter.send(">> Adapter mounted. Listening for UDP telemetry broadcasts...\n");
+
+                // Give the adapter a window to actually receive some packets on the port.
+                Thread.sleep(3000);
+
+                Map<String, Set<String>> cache = groundStationProcessManager.getDiscoveredCacheForPort(port);
+                emitter.send(">> Intercepted active entities on port " + port + ": " + cache.size() + "\n");
+
+                Map<String, Boolean> inDb = groundStationProcessManager.compareToDb(cache.keySet());
+
+                emitter.send("---SCAN_COMPLETE---\n");
+
+                List<Map<String, Object>> results = new ArrayList<>();
+                for (Map.Entry<String, Set<String>> entry : cache.entrySet()) {
+                    Map<String, Object> vehicleInfo = new LinkedHashMap<>();
+                    vehicleInfo.put("vehicleId", entry.getKey());
+                    vehicleInfo.put("detectedParameters", new ArrayList<>(entry.getValue()));
+                    vehicleInfo.put("inDatabase", inDb.getOrDefault(entry.getKey(), false));
+                    results.add(vehicleInfo);
+                }
+
+                emitter.send(objectMapper.writeValueAsString(results) + "\n");
+                emitter.complete();
+
+            } catch (Exception e) {
+                try {
+                    emitter.send(">> ERROR during scan: " + e.getMessage() + "\n");
+                    emitter.completeWithError(e);
+                } catch (Exception ignored) {}
+            }
+        }).start();
+
+        return emitter;
+    }
+}
+package com.fleetapp.service;
+
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fleetapp.dto.AdapterStudioRequests.LlmGenerationRequest;
+import org.springframework.stereotype.Service;
+import org.springframework.web.client.RestTemplate;
+import org.springframework.http.*;
+
+import java.io.IOException;
+import java.nio.file.*;
+import java.util.*;
+import java.util.stream.Collectors;
+import java.util.stream.Stream;
+
+@Service
+public class AdapterStudioService {
+
+    private final Path adapterDir = Paths.get(System.getProperty("user.dir"), "Python_Files", "Python_Codes", "Vehicle_Adapters");
+    private final RestTemplate restTemplate = new RestTemplate();
+    private final ObjectMapper objectMapper = new ObjectMapper();
+
+    // Default Ollama local endpoint
+    private final String OLLAMA_BASE_URL = "http://localhost:11434";
+
+    public AdapterStudioService() throws IOException {
+        if (!Files.exists(adapterDir)) {
+            Files.createDirectories(adapterDir);
+        }
+    }
+
+    public List<String> listAdapters() throws IOException {
+        try (Stream<Path> paths = Files.list(adapterDir)) {
+            return paths
+                    .filter(Files::isRegularFile)
+                    .map(path -> path.getFileName().toString())
+                    .filter(name -> name.endsWith(".py"))
+                    .collect(Collectors.toList());
+        }
+    }
+
+    public String readAdapter(String filename) throws IOException {
+        Path filePath = adapterDir.resolve(filename).normalize();
+        validatePathSafety(filePath);
+        return Files.readString(filePath);
+    }
+
+    public void saveAdapter(String filename, String code) throws IOException {
+        Path filePath = adapterDir.resolve(filename).normalize();
+        validatePathSafety(filePath);
+        Files.writeString(filePath, code, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
+    }
+
+    public void deleteAdapter(String filename) throws IOException {
+        Path filePath = adapterDir.resolve(filename).normalize();
+        validatePathSafety(filePath);
+        Files.deleteIfExists(filePath);
+    }
+
+    /**
+     * Queries local Ollama daemon for all installed models (/api/tags)
+     */
+    public List<String> listOllamaModels() {
+        List<String> modelNames = new ArrayList<>();
+        try {
+            String response = restTemplate.getForObject(OLLAMA_BASE_URL + "/api/tags", String.class);
+            JsonNode root = objectMapper.readTree(response);
+            JsonNode modelsNode = root.path("models");
+            if (modelsNode.isArray()) {
+                for (JsonNode node : modelsNode) {
+                    modelNames.add(node.path("name").asText());
+                }
+            }
+        } catch (Exception e) {
+            System.err.println(">> [OLLAMA] Unable to fetch models: " + e.getMessage());
+        }
+        return modelNames;
+    }
+
+    /**
+     * Builds structured prompt with Sample Code, Sample Input, and Sample Output schema,
+     * calls Ollama, and cleans the output code.
+     */
+    public String generateAdapterCode(LlmGenerationRequest request) {
+        String selectedModel = (request.getModel() != null && !request.getModel().isBlank())
+                ? request.getModel()
+                : "llama3";
+
+        String systemPrompt = "You are an expert Python systems engineer building stateless telemetry stream adapters.\n" +
+                "RULES:\n" +
+                "1. Output ONLY a clean, standalone, executable Python script using standard 'socket' and 'argparse'.\n" +
+                "2. DO NOT use asyncio, custom protocol classes, config files, or databases.\n" +
+                "3. DO NOT include any firewall or vehicle authorization logic (security is handled upstream by Java).\n" +
+                "4. Implement parse_packet(raw_data) to transform raw input bytes into the required schema dictionary.\n" +
+                "5. Implement run_adapter(ip, port) to bind UDP socket, parse packets, and print clean json with print(json.dumps(parsed), flush=True).\n" +
+                "6. The script is always launched with exactly these two CLI flags and no others: " +
+                "--listen-ip <ip> --listen-port <port>. You MUST define argparse arguments named " +
+                "'--listen-ip' (default '0.0.0.0') and '--listen-port' (type int, any sensible default) - " +
+                "NOT positional arguments, and NOT any other flag names.\n" +
+                "7. The __main__ block MUST end by actually calling run_adapter(args.listen_ip, args.listen_port). " +
+                "A script that only parses arguments and never calls run_adapter is INVALID.\n" +
+                "8. Output ONLY pure executable Python code without markdown ticks or explanations.";
+
+        String userPrompt = String.format(
+                "### TASK:\n%s\n\n" +
+                        "### SAMPLE RAW INPUT:\n%s\n\n" +
+                        "### REQUIRED OUTPUT SCHEMA:\n%s\n\n" +
+                        "Generate the complete stateless adapter script.",
+                request.getInstruction(),
+                request.getRawSample(),
+                request.getTargetSchema()
+        );
+
+        Map<String, Object> requestBody = Map.of(
+                "model", selectedModel,
+                "system", systemPrompt,
+                "prompt", userPrompt,
+                "stream", false,
+                "options", Map.of("temperature", 0.1)
+        );
+
+        // ... rest of your RestTemplate call ...
+
+        HttpHeaders headers = new HttpHeaders();
+        headers.setContentType(MediaType.APPLICATION_JSON);
+        HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
+
+        try {
+            ResponseEntity<String> response = restTemplate.postForEntity(OLLAMA_BASE_URL + "/api/generate", entity, String.class);
+            JsonNode root = objectMapper.readTree(response.getBody());
+            String rawCode = root.path("response").asText();
+            return sanitizeGeneratedCode(rawCode);
+        } catch (Exception e) {
+            return "# Error connecting to local Ollama daemon: " + e.getMessage() +
+                    "\n# Ensure Ollama is running (`ollama serve`) on http://localhost:11434";
+        }
+    }
+
+    /**
+     * Strips accidental markdown backticks (```python ... ```) returned by LLMs
+     */
+    private String sanitizeGeneratedCode(String code) {
+        if (code == null) return "";
+        String sanitized = code.trim();
+        if (sanitized.startsWith("```python")) {
+            sanitized = sanitized.substring(9);
+        } else if (sanitized.startsWith("```")) {
+            sanitized = sanitized.substring(3);
+        }
+        if (sanitized.endsWith("```")) {
+            sanitized = sanitized.substring(0, sanitized.length() - 3);
+        }
+        return sanitized.trim();
+    }
+
+    private void validatePathSafety(Path filePath) {
+        if (!filePath.startsWith(adapterDir)) {
+            throw new SecurityException("Access denied. Path traversal detected.");
+        }
+    }
+}package com.fleetapp.controller;
+
+import com.fleetapp.dto.AdapterStudioRequests.SaveAdapterRequest;
+import com.fleetapp.dto.AdapterStudioRequests.LlmGenerationRequest;
+import com.fleetapp.service.AdapterStudioService;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.List;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/studio")
+@CrossOrigin(origins = "${app.cors.allowed-origin:http://localhost:3000}")
+public class AdapterStudioController {
+
+    @Autowired
+    private AdapterStudioService studioService;
+
+    @GetMapping("/adapters")
+    public ResponseEntity<List<String>> listAdapters() {
+        try {
+            return ResponseEntity.ok(studioService.listAdapters());
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    @GetMapping("/adapters/{filename}")
+    public ResponseEntity<Map<String, String>> getAdapter(@PathVariable String filename) {
+        try {
+            String code = studioService.readAdapter(filename);
+            return ResponseEntity.ok(Map.of("code", code));
+        } catch (Exception e) {
+            return ResponseEntity.notFound().build();
+        }
+    }
+
+    @PostMapping("/adapters/{filename}")
+    public ResponseEntity<Map<String, String>> saveAdapter(@PathVariable String filename, @RequestBody SaveAdapterRequest request) {
+        try {
+            studioService.saveAdapter(filename, request.getCode());
+            return ResponseEntity.ok(Map.of("message", "Adapter saved successfully"));
+        } catch (Exception e) {
+            return ResponseEntity.badRequest().body(Map.of("error", e.getMessage()));
+        }
+    }
+
+    @DeleteMapping("/adapters/{filename}")
+    public ResponseEntity<Void> deleteAdapter(@PathVariable String filename) {
+        try {
+            studioService.deleteAdapter(filename);
+            return ResponseEntity.ok().build();
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+
+    @GetMapping("/ollama/models")
+    public ResponseEntity<List<String>> listOllamaModels() {
+        return ResponseEntity.ok(studioService.listOllamaModels());
+    }
+
+    @PostMapping("/adapters/generate")
+    public ResponseEntity<Map<String, String>> generateAdapterCode(@RequestBody LlmGenerationRequest request) {
+        try {
+            String generatedCode = studioService.generateAdapterCode(request);
+            return ResponseEntity.ok(Map.of("code", generatedCode));
+        } catch (Exception e) {
+            return ResponseEntity.internalServerError().build();
+        }
+    }
+}package com.fleetapp.dto;
+
+public class AdapterStudioRequests {
+
+    public static class SaveAdapterRequest {
+        private String code;
+        public String getCode() { return code; }
+        public void setCode(String code) { this.code = code; }
+    }
+
+    public static class LlmGenerationRequest {
+        private String model;
+        private String instruction;
+        private String rawSample;
+        private String targetSchema;
+        private String currentCode;
+
+        public String getModel() { return model; }
+        public void setModel(String model) { this.model = model; }
+
+        public String getInstruction() { return instruction; }
+        public void setInstruction(String instruction) { this.instruction = instruction; }
+
+        public String getRawSample() { return rawSample; }
+        public void setRawSample(String rawSample) { this.rawSample = rawSample; }
+
+        public String getTargetSchema() { return targetSchema; }
+        public void setTargetSchema(String targetSchema) { this.targetSchema = targetSchema; }
+
+        public String getCurrentCode() { return currentCode; }
+        public void setCurrentCode(String currentCode) { this.currentCode = currentCode; }
+    }
+}package com.fleetapp.config;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.JsonNode;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fleetapp.entity.VehicleConfig;
+import com.fleetapp.repository.VehicleRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
+import org.springframework.data.geo.Point;
+import org.springframework.data.redis.core.StringRedisTemplate;
+import org.springframework.stereotype.Component;
+
+import jakarta.annotation.PreDestroy;
+import java.io.BufferedReader;
+import java.io.IOException;
+import java.io.InputStreamReader;
+import java.nio.file.*;
+import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.regex.Pattern;
+import java.util.regex.PatternSyntaxException;
+import java.util.stream.Stream;
+
+/**
+ * Owns every Python ground-station adapter process.
+ *
+ * Two invariants this class enforces that did not exist before:
+ *
+ *  1. ONE ADAPTER PER PORT. A UDP port may only ever have a single live
+ *     adapter process bound to it. This is tracked centrally in
+ *     {@code portRegistry} rather than left to the OS - see
+ *     {@link #claimPort(int, String)}.
+ *
+ *  2. Every adapter is launched with an EXPLICIT --listen-port. Previously
+ *     adapters were launched with only --listen-ip, so every script always
+ *     bound whatever default port was hardcoded in its own argparse config.
+ *     That made it impossible to run two adapters that happened to share a
+ *     default port, and impossible to point an adapter at an
+ *     operator-chosen port from the "Add Vehicle" flow.
+ */
+@Component
+public class GroundStationProcessManager {
+
+    private static final Logger logger = LoggerFactory.getLogger(GroundStationProcessManager.class);
+
+    @Autowired
+    private StringRedisTemplate redisTemplate;
+
+    @Autowired
+    private VehicleRepository vehicleRepository;
+
+    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ExecutorService streamExecutor = Executors.newCachedThreadPool();
+
+    private final Path adapterDir = Paths.get(System.getProperty("user.dir"), "Python_Files", "Python_Codes", "Vehicle_Adapters");
+    private final Path mountsFile = Paths.get(System.getProperty("user.dir"), "adapter_mounts.json");
+    private final Path vehicleConfigsFile = Paths.get(System.getProperty("user.dir"), "vehicle_configs.json");
+
+    /** port -> the single adapter process bound to that port. Guarded by itself. */
+    private final Map<Integer, Mount> portRegistry = new HashMap<>();
+
+    /**
+     * Per-port discovery cache: port -> (vehicleId -> observed telemetry field names).
+     * Keyed by port (not merged globally) so that a scan for one adapter/port never
+     * shows vehicles that were actually seen on a *different* port.
+     */
+    private final Map<Integer, Map<String, Set<String>>> discoveredCache = new ConcurrentHashMap<>();
+
+    public static class Mount {
+        public final String adapterScript;
+        public final int port;
+        public final Process process;
+
+        Mount(String adapterScript, int port, Process process) {
+            this.adapterScript = adapterScript;
+            this.port = port;
+            this.process = process;
+        }
+    }
+
+    /** Thrown when a port is requested that is already bound by a *different* adapter script. */
+    public static class PortConflictException extends RuntimeException {
+        public final int port;
+        public final String heldBy;
+
+        public PortConflictException(int port, String heldBy) {
+            super("Port " + port + " is already bound by adapter '" + heldBy + "'. One adapter per port is enforced - stop it first or choose a different port.");
+            this.port = port;
+            this.heldBy = heldBy;
+        }
+    }
+
+    // =========================================================================================
+    // STARTUP
+    // =========================================================================================
+
+    @EventListener(ApplicationReadyEvent.class)
+    public void startAllAdapters() {
+        logger.info("Initializing Ground Station Adapters...");
+
+        List<PersistedMount> mounts = loadPersistedMounts();
+
+        if (mounts.isEmpty() && Files.exists(adapterDir)) {
+            // First run / migration path: nothing has been mounted explicitly yet.
+            // Fall back to "one mount per adapter file found, on its own script default port"
+            // so existing deployments keep working, then persist that as the real mount list
+            // going forward so every subsequent start goes through the port registry.
+            mounts = discoverDefaultMounts();
+            persistMounts(mounts);
+        }
+
+        for (PersistedMount m : mounts) {
+            try {
+                ensureMountRunning(m.adapterScript, m.port);
+            } catch (Exception e) {
+                logger.error("Failed to bring up persisted mount {} on port {}", m.adapterScript, m.port, e);
+            }
+        }
+    }
+
+    /** Best-effort: read each script's own argparse default so first-run behavior is unchanged. */
+    private List<PersistedMount> discoverDefaultMounts() {
+        List<PersistedMount> result = new ArrayList<>();
+        try (Stream<Path> paths = Files.list(adapterDir)) {
+            List<String> scripts = paths.filter(Files::isRegularFile)
+                    .map(p -> p.getFileName().toString())
+                    .filter(name -> name.endsWith(".py") && !name.startsWith("."))
+                    .sorted()
+                    .collect(java.util.stream.Collectors.toList());
+
+            for (String script : scripts) {
+                Integer defaultPort = readDefaultPortFromArgparse(script);
+                if (defaultPort == null) {
+                    logger.warn("Could not determine a default --listen-port for '{}'; skipping auto-mount. " +
+                            "Mount it explicitly (with a port) from the Add Vehicle screen instead.", script);
+                    continue;
+                }
+                result.add(new PersistedMount(script, defaultPort));
+            }
+        } catch (IOException e) {
+            logger.error("Failed to read adapter directory", e);
+        }
+        return result;
+    }
+
+    private Integer readDefaultPortFromArgparse(String scriptName) {
+        try {
+            String content = Files.readString(adapterDir.resolve(scriptName));
+            java.util.regex.Matcher m = Pattern.compile("--listen-port[^\\n]*?default\\s*=\\s*(\\d+)").matcher(content);
+            if (m.find()) {
+                return Integer.parseInt(m.group(1));
+            }
+        } catch (IOException e) {
+            logger.warn("Could not read {} to infer default port: {}", scriptName, e.getMessage());
+        }
+        return null;
+    }
+
+    // =========================================================================================
+    // MOUNT / PORT LIFECYCLE
+    // =========================================================================================
+
+    /**
+     * Idempotently ensures {@code adapterScript} is running and bound to {@code port}.
+     *
+     * - If that exact (script, port) pair is already running, this is a no-op (reuse).
+     * - If the port is held by a DIFFERENT script, throws {@link PortConflictException}.
+     * - Otherwise launches a new process on that port.
+     *
+     * This is what both the live-telemetry startup path AND the "Add Vehicle" discovery
+     * scan call, so a registration scan never accidentally starts a second, competing
+     * process on a port some other adapter already owns.
+     */
+    public synchronized Mount ensureMountRunning(String adapterScript, int port) throws IOException {
+        if (adapterScript == null || adapterScript.isBlank()) {
+            throw new IllegalArgumentException("adapterScript is required");
+        }
+        if (port <= 0 || port > 65535) {
+            throw new IllegalArgumentException("port must be between 1 and 65535");
+        }
+
+        Mount existing = portRegistry.get(port);
+        if (existing != null) {
+            if (isMountAlive(existing)) {
+                if (existing.adapterScript.equals(adapterScript)) {
+                    return existing; // already exactly what was asked for - reuse it
+                }
+                throw new PortConflictException(port, existing.adapterScript);
+            }
+            // stale entry for a dead process, or a non-adapter placeholder claim - fall
+            // through and relaunch (a placeholder claim is treated as "in use" below,
+            // never removed silently, so sandbox reservations still block us here).
+            if (existing.process != null) {
+                portRegistry.remove(port);
+            } else {
+                throw new PortConflictException(port, existing.adapterScript);
+            }
+        }
+
+        Mount mount = launchAdapterProcess(adapterScript, port);
+        portRegistry.put(port, mount);
+        persistMounts(currentMountsSnapshot());
+        return mount;
+    }
+
+    /** Claims a port for a non-adapter consumer (e.g. the Adapter Studio sandbox) without launching anything. */
+    public synchronized void claimPort(int port, String owner) {
+        Mount existing = portRegistry.get(port);
+        if (isMountAlive(existing) || isPlaceholderClaim(existing)) {
+            throw new PortConflictException(port, existing.adapterScript);
+        }
+        // A null-process placeholder mount reserves the port for the caller (e.g. sandbox test run)
+        // without there being a real adapter Process behind it yet.
+        portRegistry.put(port, new Mount(owner, port, null));
+    }
+
+    public synchronized void releasePort(int port) {
+        portRegistry.remove(port);
+    }
+
+    /** All ports currently bound by a live adapter process - lets the UI show what's already taken. */
+    public List<PersistedMount> listActiveMounts() {
+        return currentMountsSnapshot();
+    }
+
+    public synchronized Optional<String> ownerOf(int port) {
+        Mount m = portRegistry.get(port);
+        if (m == null) return Optional.empty();
+        return Optional.of(m.adapterScript);
+    }
+
+    private boolean isMountAlive(Mount m) {
+        return m != null && m.process != null && m.process.isAlive();
+    }
+
+    private boolean isPlaceholderClaim(Mount m) {
+        return m != null && m.process == null;
+    }
+
+    private Mount launchAdapterProcess(String scriptName, int port) throws IOException {
+        Path scriptPath = adapterDir.resolve(scriptName);
+        if (!Files.exists(scriptPath)) {
+            throw new IOException("Adapter script not found: " + scriptPath);
+        }
+
+        ProcessBuilder processBuilder = new ProcessBuilder(
+                "Python_Files/.venv/bin/python3.13",
+                scriptPath.toString(),
+                "--listen-ip", "0.0.0.0",
+                "--listen-port", String.valueOf(port)
+        );
+
+        processBuilder.redirectErrorStream(true);
+        processBuilder.environment().put("PYTHONUNBUFFERED", "1");
+
+        Process process = processBuilder.start();
+        logger.info("Launched adapter '{}' on port {} with PID: {}", scriptName, port, process.pid());
+
+        // Each adapter process gets its own dedicated reader thread ("separate terminal").
+        // These threads are fully independent of one another - see the class-level note on
+        // thread/port hygiene below - so N adapters never contend over a single buffer.
+        startStreamProcessor(process, scriptName, port);
+
+        process.onExit().thenAccept(p -> {
+            logger.warn("Adapter '{}' on port {} exited (code {}). Releasing port.", scriptName, port, p.exitValue());
+            synchronized (this) {
+                Mount current = portRegistry.get(port);
+                if (current != null && current.process == p) {
+                    portRegistry.remove(port);
+                }
+            }
+        });
+
+        return new Mount(scriptName, port, process);
+    }
+
+    private void startStreamProcessor(Process process, String scriptName, int port) {
+        streamExecutor.submit(() -> {
+            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                String line;
+                while ((line = reader.readLine()) != null) {
+
+                    if (!line.trim().startsWith("{")) {
+                        logger.debug("[{}:{}] {}", scriptName, port, line);
+                        continue;
+                    }
+
+                    try {
+                        JsonNode payload = objectMapper.readTree(line);
+
+                        String vehicleId = null;
+                        if (payload.has("vehicle_id")) {
+                            vehicleId = payload.get("vehicle_id").asText();
+                        } else if (payload.has("uav_id")) {
+                            vehicleId = payload.get("uav_id").asText();
+                        } else if (payload.has("craft_id")) {
+                            vehicleId = payload.get("craft_id").asText();
+                        }
+
+                        if (vehicleId != null && !vehicleId.isBlank()) {
+                            Set<String> keys = new HashSet<>();
+                            payload.fieldNames().forEachRemaining(keys::add);
+                            discoveredCache
+                                    .computeIfAbsent(port, k -> new ConcurrentHashMap<>())
+                                    .computeIfAbsent(vehicleId, k -> ConcurrentHashMap.newKeySet())
+                                    .addAll(keys);
+                        }
+
+                        if (vehicleId != null && isVehicleAuthorized(vehicleId)) {
+                            redisTemplate.convertAndSend("telemetry.live", line);
+
+                            if (payload.has("longitude") && payload.has("latitude")) {
+                                double lon = payload.get("longitude").asDouble();
+                                double lat = payload.get("latitude").asDouble();
+                                redisTemplate.opsForGeo().add("fleet_locations", new Point(lon, lat), vehicleId);
+                            }
+                        } else {
+                            logger.warn("[{}:{}] Firewall Blocked Unauthorized ID: {}", scriptName, port, vehicleId);
+                        }
+
+                    } catch (Exception e) {
+                        logger.error("[{}:{}] Failed to parse incoming JSON: {}", scriptName, port, line, e);
+                    }
+                }
+            } catch (IOException e) {
+                logger.error("[{}:{}] Error reading adapter stream", scriptName, port, e);
+            }
+        });
+    }
+
+    // =========================================================================================
+    // AUTHORIZATION - exact ID match OR regex idPattern match, so a single vehicle_configs.json
+    // entry can authorize a whole fleet of vehicles sharing an ID naming convention on one port,
+    // instead of requiring one entry per exact vehicle_id.
+    // =========================================================================================
+
+    private boolean isVehicleAuthorized(String vehicleIdStr) {
+        if (vehicleIdStr == null || vehicleIdStr.isBlank()) {
+            return false;
+        }
+
+        for (VehicleConfig config : readVehicleConfigs()) {
+            if (vehicleIdStr.equals(config.getId())) {
+                return true;
+            }
+            if (config.getIdPattern() != null && !config.getIdPattern().isBlank()) {
+                Pattern compiled = compilePatternSafely(config.getIdPattern());
+                if (compiled != null && compiled.matcher(vehicleIdStr).matches()) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private final Map<String, Pattern> patternCache = new ConcurrentHashMap<>();
+
+    private Pattern compilePatternSafely(String regex) {
+        return patternCache.computeIfAbsent(regex, r -> {
+            try {
+                return Pattern.compile(r);
+            } catch (PatternSyntaxException e) {
+                logger.error("Invalid idPattern regex '{}' in vehicle_configs.json - ignoring", r, e);
+                return null;
+            }
+        });
+    }
+
+    private List<VehicleConfig> readVehicleConfigs() {
+        try {
+            if (Files.exists(vehicleConfigsFile)) {
+                return objectMapper.readValue(vehicleConfigsFile.toFile(), new TypeReference<List<VehicleConfig>>() {});
+            }
+        } catch (Exception e) {
+            logger.error("Error reading vehicle_configs.json", e);
+        }
+        return Collections.emptyList();
+    }
+
+    // =========================================================================================
+    // DISCOVERY (used by DiscoveryController's /api/discovery/scan)
+    // =========================================================================================
+
+    /** Raw sightings for exactly one port - never mixed with sightings from any other port/adapter. */
+    public Map<String, Set<String>> getDiscoveredCacheForPort(int port) {
+        return discoveredCache.getOrDefault(port, Collections.emptyMap());
+    }
+
+    /**
+     * Splits a set of discovered vehicle IDs into those already present in the Postgres
+     * `vehicle` table and those that are not - i.e. the actual "compare to db" step, using
+     * the same ID normalization rule FleetController uses when it registers a vehicle
+     * (literal UUID if the id parses as one, otherwise a deterministic name-based UUID).
+     */
+    public Map<String, Boolean> compareToDb(Collection<String> vehicleIds) {
+        Map<String, Boolean> result = new LinkedHashMap<>();
+        for (String rawId : vehicleIds) {
+            UUID uuid;
+            try {
+                uuid = UUID.fromString(rawId);
+            } catch (IllegalArgumentException e) {
+                uuid = UUID.nameUUIDFromBytes(rawId.getBytes());
+            }
+            result.put(rawId, vehicleRepository.existsById(uuid));
+        }
+        return result;
+    }
+
+    // =========================================================================================
+    // PERSISTENCE OF MOUNTS (adapter_mounts.json)
+    // =========================================================================================
+
+    public static class PersistedMount {
+        public String adapterScript;
+        public int port;
+
+        public PersistedMount() {}
+
+        PersistedMount(String adapterScript, int port) {
+            this.adapterScript = adapterScript;
+            this.port = port;
+        }
+    }
+
+    private synchronized List<PersistedMount> currentMountsSnapshot() {
+        List<PersistedMount> snapshot = new ArrayList<>();
+        for (Mount m : portRegistry.values()) {
+            if (m.process != null && m.process.isAlive()) {
+                snapshot.add(new PersistedMount(m.adapterScript, m.port));
+            }
+        }
+        return snapshot;
+    }
+
+    private List<PersistedMount> loadPersistedMounts() {
+        try {
+            if (Files.exists(mountsFile)) {
+                return objectMapper.readValue(mountsFile.toFile(), new TypeReference<List<PersistedMount>>() {});
+            }
+        } catch (Exception e) {
+            logger.error("Error reading adapter_mounts.json", e);
+        }
+        return new ArrayList<>();
+    }
+
+    private void persistMounts(List<PersistedMount> mounts) {
+        try {
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(mountsFile.toFile(), mounts);
+        } catch (IOException e) {
+            logger.error("Error saving adapter_mounts.json", e);
+        }
+    }
+
+    // =========================================================================================
+    // SHUTDOWN
+    // =========================================================================================
+
+    @PreDestroy
+    public void stopAllAdapters() {
+        logger.info("Shutting down all Ground Station Python adapters...");
+        for (Mount mount : portRegistry.values()) {
+            if (mount.process != null && mount.process.isAlive()) {
+                mount.process.destroy();
+            }
+        }
+        streamExecutor.shutdownNow();
+    }
+}

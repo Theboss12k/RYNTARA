@@ -1,0 +1,4 @@
+[ {
+  "adapterScript" : "multiple_drones_adapter.py",
+  "port" : 14555
+} ]

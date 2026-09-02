@@ -2,19 +2,26 @@ server:
   port: 8080
 
 spring:
+  # Define multiple datasources
   datasource:
-    url: jdbc:postgresql://localhost:5432/fleet_db
-    username: postgres
-    password: password
-    driver-class-name: org.postgresql.Driver
-
-  jpa:
-    hibernate:
-      ddl-auto: update
-    show-sql: false
+    primary:
+      jdbc-url: jdbc:postgresql://localhost:5432/fleet_db
+      username: postgres
+      password: password
+      driver-class-name: org.postgresql.Driver
+    planning:
+      jdbc-url: jdbc:postgresql://localhost:5433/fleet_planning_db
+      username: postgres
+      password: postgres  # <-- CHANGED THIS TO match your Docker container
+      driver-class-name: org.postgresql.Driver
 
   data:
     redis:
       host: localhost
       port: 6379
 
+app:
+  cors:
+    allowed-origin: http://localhost:3000
+  studio:
+    api-token: ""

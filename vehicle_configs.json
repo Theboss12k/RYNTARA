@@ -1,0 +1,29 @@
+[ {
+  "id" : "CUSTOM-DRONE-99",
+  "name" : "CUSTOM",
+  "category" : "UAV",
+  "monitoredParameters" : [ "speed_kmh", "altitude", "battery_level", "latitude", "heading_deg", "vehicle_id", "longitude" ],
+  "adapter" : "multiple_drones_adapter.py",
+  "dangerZoneMultiplier" : 4
+}, {
+  "id" : "LONDON-ROVER-02",
+  "name" : "LONDON ROVER",
+  "category" : "GROUND",
+  "monitoredParameters" : [ "speed_kmh", "altitude", "battery_level", "latitude", "heading_deg", "vehicle_id", "longitude" ],
+  "adapter" : "multiple_drones_adapter.py",
+  "dangerZoneMultiplier" : 7
+}, {
+  "id" : "SYDNEY-DRONE-03",
+  "name" : "SYDNEY",
+  "category" : "UAV",
+  "monitoredParameters" : [ "speed_kmh", "altitude", "battery_level", "latitude", "heading_deg", "vehicle_id", "longitude" ],
+  "adapter" : "multiple_drones_adapter.py",
+  "dangerZoneMultiplier" : 5
+}, {
+  "id" : "TOKYO-UAV-01",
+  "name" : "TOKYO",
+  "category" : "UAV",
+  "monitoredParameters" : [ "speed_kmh", "altitude", "battery_level", "latitude", "heading_deg", "vehicle_id", "longitude" ],
+  "adapter" : "multiple_drones_adapter.py",
+  "dangerZoneMultiplier" : 9
+} ]
