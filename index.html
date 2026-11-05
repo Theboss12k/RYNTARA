@@ -1,0 +1,490 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<link rel="icon" href="media/ryntara-logo-dark.svg" type="image/svg+xml">
+<style>:root{padding-top:env(safe-area-inset-top,0px);padding-bottom:env(safe-area-inset-bottom,0px)}body{margin:0}img{max-width:100%}[hidden]{display:none!important}</style>
+<title>RYNTARA</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<meta name="description" content="RYNTARA is a vehicle-independent coordination and runtime safety framework for autonomous fleets.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Archivo:wdth,wght@62..125,400;62..125,500;62..125,600;62..125,700&family=JetBrains+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: a plain technical document about a ground station. Wide footage, a narrow reading column,
+   no chrome around the screenshots. Motion is tied to scroll position, never to a timer. */
+:root {
+  --ground: #0a0e14;
+  --raise: #10161f;
+  --line: #1e2733;
+  --ink: #e2e7ee;
+  --muted: #8c97a6;
+  --sky: #38bdf8;          /* brand sky, from the RYNTARA mark */
+  --steel: #3d67a1;        /* brand steel */
+  --route: #2bd889;        /* planner: approved route */
+  --zone: #ff4d5e;         /* planner: redzone / rejected path */
+  --display: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --body: "Archivo", "Helvetica Neue", Arial, sans-serif;
+  --mono: "JetBrains Mono", ui-monospace, "SF Mono", Menlo, monospace;
+  --measure: 62ch;
+  --wide: 1160px;
+  color-scheme: dark;
+}
+* { box-sizing: border-box; }
+html { scroll-padding-top: 64px; }
+body {
+  background: var(--ground); color: var(--ink);
+  font: 400 1.0625rem/1.65 var(--body);
+  -webkit-font-smoothing: antialiased;
+}
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--ground); }
+a { color: var(--sky); text-underline-offset: 3px; }
+a:focus-visible, button:focus-visible { outline: 2px solid var(--sky); outline-offset: 3px; }
+code, pre { font-family: var(--mono); }
+h1, h2, h3 { font-family: var(--display); text-wrap: balance; margin: 0; }
+p { margin: 0; }
+figure { margin: 0; }
+
+.wrap { max-width: var(--wide); margin: 0 auto; padding-left: max(16px, env(safe-area-inset-left, 0px)); padding-right: max(16px, env(safe-area-inset-right, 0px)); }
+
+/* header */
+.top { position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5; background: var(--ground); border-bottom: 1px solid var(--line); }
+.top .wrap { display: flex; align-items: baseline; gap: 28px; padding-block: 18px; }
+.mark { font: 700 .95rem/1 var(--display); font-variation-settings: "wdth" 125; letter-spacing: .3em; color: var(--ink); text-decoration: none; }
+.top nav { display: flex; gap: 24px; margin-left: auto; font-size: .9rem; }
+.top nav a { color: var(--muted); text-decoration: none; }
+.top nav a:hover, .top nav a:focus-visible { color: var(--ink); }
+.top nav .gh { color: var(--ink); }
+@media (max-width: 760px) { .top nav a:not(.gh) { display: none; } }
+
+/* hero */
+.hero { padding-block: clamp(56px, 9vw, 112px) 0; }
+.hero h1 { font-size: clamp(2.4rem, 6vw, 4.6rem); line-height: 1; font-weight: 700; font-variation-settings: "wdth" 116; letter-spacing: -.015em; max-width: 15ch; }
+.hero-text { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 20px 48px; margin-top: 32px; align-items: end; }
+@media (max-width: 860px) { .hero-text { grid-template-columns: minmax(0, 1fr); } }
+.lede { color: var(--muted); font-size: 1.125rem; max-width: 48ch; }
+.ctas { display: flex; flex-wrap: wrap; gap: 20px; align-items: center; justify-self: end; }
+@media (max-width: 860px) { .ctas { justify-self: start; } }
+.btn { display: inline-block; padding: 12px 20px; border-radius: 4px; font-weight: 600; font-size: .95rem; text-decoration: none; background: var(--sky); color: var(--ground); }
+.btn:hover { background: var(--ink); }
+.link { color: var(--ink); font-weight: 500; }
+.hero-shot { margin-top: clamp(40px, 6vw, 72px); }
+
+/* footage */
+.shot { border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--raise); position: relative; }
+.shot video, .shot img { display: block; width: 100%; height: auto; aspect-ratio: 16 / 10; object-fit: cover; }
+.shot.square video, .shot.square img { aspect-ratio: 1; }
+.toggle { position: absolute; right: 10px; bottom: 10px; border: 1px solid var(--line); background: var(--ground); color: var(--muted); font: 500 .72rem/1 var(--mono); padding: 7px 9px; border-radius: 4px; cursor: pointer; }
+.toggle:hover { color: var(--ink); }
+figcaption { display: flex; gap: 14px; flex-wrap: wrap; margin-top: 12px; font-size: .9rem; color: var(--muted); }
+figcaption code { color: var(--ink); font-size: .8rem; }
+
+/* sections */
+section { padding-block: clamp(72px, 10vw, 128px); }
+.head { max-width: var(--measure); display: grid; gap: 14px; margin-bottom: clamp(36px, 5vw, 56px); }
+.head h2 { font-size: clamp(1.8rem, 3.6vw, 2.75rem); line-height: 1.08; font-weight: 700; font-variation-settings: "wdth" 110; }
+.head p { color: var(--muted); }
+
+/* pipeline rail: a real sequence, filled as you scroll through it */
+.rail { --fill: 1; list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 28px; position: relative; padding-top: 28px; }
+.rail::before, .rail::after { content: ""; position: absolute; left: 0; top: 0; height: 2px; background: var(--line); width: 100%; }
+.rail::after { background: var(--sky); width: calc(var(--fill) * 100%); }
+.rail li { display: grid; gap: 8px; align-content: start; min-width: 0; color: var(--muted); transition: color .3s; }
+.rail li h3 { font-size: 1.05rem; font-weight: 600; color: var(--muted); transition: color .3s; }
+.rail li p { font-size: .92rem; line-height: 1.55; }
+.rail li.on h3 { color: var(--ink); }
+.rail li.on { color: var(--ink); }
+@media (max-width: 900px) {
+  .rail { grid-template-columns: minmax(0, 1fr); padding-top: 0; padding-left: 24px; gap: 24px; }
+  .rail::before, .rail::after { top: 0; left: 0; width: 2px; height: 100%; }
+  .rail::after { height: calc(var(--fill) * 100%); width: 2px; }
+}
+
+.packets { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 24px; margin-top: clamp(48px, 6vw, 72px); }
+@media (max-width: 860px) { .packets { grid-template-columns: minmax(0, 1fr); } }
+.pkt { min-width: 0; display: grid; gap: 10px; align-content: start; }
+.pkt h3 { font-size: .95rem; font-weight: 600; }
+.pkt h3 span { color: var(--muted); font-weight: 400; }
+.pkt pre { margin: 0; padding: 16px 18px; overflow-x: auto; font-size: .8rem; line-height: 1.65; background: var(--raise); border: 1px solid var(--line); border-radius: 6px; }
+.pkt .k { color: var(--sky); }
+
+/* feature rows */
+.feature { display: grid; grid-template-columns: minmax(0, 4fr) minmax(0, 8fr); gap: clamp(24px, 5vw, 64px); align-items: center; }
+.feature + .feature { margin-top: clamp(72px, 9vw, 120px); }
+.feature.flip { grid-template-columns: minmax(0, 8fr) minmax(0, 4fr); }
+.feature.flip .copy { order: 2; }
+@media (max-width: 900px) { .feature, .feature.flip { grid-template-columns: minmax(0, 1fr); } .feature.flip .copy { order: 0; } }
+.copy { display: grid; gap: 14px; min-width: 0; }
+.copy h3 { font-size: 1.45rem; line-height: 1.2; font-weight: 650; }
+.copy p { color: var(--muted); }
+.swatch { display: inline-block; width: 18px; height: 3px; vertical-align: middle; margin-right: 6px; border-radius: 2px; }
+
+/* PHASE: stages scroll past a pinned clip */
+.phase { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: clamp(32px, 5vw, 72px); align-items: start; }
+@media (max-width: 960px) { .phase { grid-template-columns: minmax(0, 1fr); } }
+.pin { position: sticky; top: 96px; }
+@media (max-width: 960px) { .pin { position: static; } }
+.stages { list-style: none; margin: 0; padding: 0; display: grid; gap: clamp(28px, 5vh, 56px); }
+.stages li { display: grid; gap: 6px; padding-left: 20px; border-left: 2px solid var(--line); transition: border-color .3s; }
+.stages li b { font-weight: 600; font-size: 1.05rem; color: var(--muted); transition: color .3s; }
+.stages li span { color: var(--muted); }
+.stages li.on { border-color: var(--sky); }
+.stages li.on b { color: var(--ink); }
+.formula { margin-top: clamp(36px, 5vw, 56px); display: grid; gap: 8px; }
+.formula .eq { font: 500 2rem/1.1 var(--mono); }
+.formula .eq sub { font-size: .5em; }
+.formula p { color: var(--muted); max-width: 46ch; }
+.runlog { width: 100%; border-collapse: collapse; font-size: .9rem; font-variant-numeric: tabular-nums; margin-top: 24px; }
+.runlog caption { text-align: left; color: var(--muted); padding-bottom: 6px; }
+.runlog td { padding: 9px 0; border-bottom: 1px solid var(--line); }
+.runlog td:last-child { text-align: right; font-family: var(--mono); font-size: .85rem; }
+.note { color: var(--muted); font-size: .9rem; margin-top: 28px; max-width: var(--measure); }
+
+/* stack table */
+.tablewrap { overflow-x: auto; }
+.stack { width: 100%; border-collapse: collapse; min-width: 640px; }
+.stack th, .stack td { text-align: left; vertical-align: top; padding: 16px 20px 16px 0; border-bottom: 1px solid var(--line); }
+.stack th { font-weight: 600; width: 18%; }
+.stack td { color: var(--muted); }
+.stack td code { color: var(--ink); font-size: .8rem; white-space: nowrap; }
+
+/* run it */
+.run { display: grid; grid-template-columns: minmax(0, 6fr) minmax(0, 5fr); gap: clamp(32px, 5vw, 64px); align-items: start; }
+@media (max-width: 960px) { .run { grid-template-columns: minmax(0, 1fr); } }
+.steps { margin: 0; padding-left: 1.3em; display: grid; gap: 22px; }
+.steps li { min-width: 0; padding-left: 6px; }
+.steps li::marker { color: var(--sky); font-family: var(--mono); font-size: .85rem; }
+.steps b { font-weight: 600; display: block; margin-bottom: 8px; }
+.steps pre { margin: 0; padding: 12px 14px; background: var(--raise); border: 1px solid var(--line); border-radius: 6px; overflow-x: auto; font-size: .78rem; line-height: 1.65; }
+.steps p { color: var(--muted); font-size: .92rem; margin-top: 8px; }
+
+footer { border-top: 1px solid var(--line); padding-block: 40px 56px; }
+footer .wrap { display: flex; flex-wrap: wrap; gap: 16px 32px; justify-content: space-between; align-items: center; color: var(--muted); font-size: .9rem; }
+footer img { width: 140px; height: auto; display: block; }
+
+/* scroll-reactive motion. --p runs 0 to 1 as an element enters the viewport.
+   It defaults to 1, so without script or with reduced motion everything sits at rest. */
+[data-rise] { --p: 1; opacity: calc(.3 + .7 * var(--p)); transform: translate3d(0, calc((1 - var(--p)) * 48px), 0); will-change: transform, opacity; }
+[data-zoom] { --z: 1; transform: scale(calc(.9 + .1 * var(--z))); transform-origin: 50% 0; will-change: transform; }
+@media (prefers-reduced-motion: reduce) {
+  [data-rise], [data-zoom] { opacity: 1 !important; transform: none !important; }
+  .rail::after { width: 100%; }
+}
+</style>
+
+</head>
+<body>
+<header class="top">
+  <div class="wrap">
+    <a class="mark" href="#top" aria-label="RYNTARA home">RYNTARA</a>
+    <nav aria-label="Sections">
+      <a href="#pipeline">How it works</a>
+      <a href="#operate">Console</a>
+      <a href="#phase">PHASE</a>
+      <a href="#run">Run it</a>
+      <a class="gh" href="https://github.com/Theboss12k/RYNTARA">GitHub ↗</a>
+    </nav>
+  </div>
+</header>
+
+<main id="top">
+  <div class="hero wrap">
+    <h1>Coordinate drones and rovers from one map.</h1>
+    <div class="hero-text">
+      <p class="lede">RYNTARA is a vehicle-independent coordination and runtime safety framework. It takes telemetry in whatever format each vehicle speaks, shows the whole fleet live, and checks planned routes against redzones and other traffic before they are approved.</p>
+      <div class="ctas">
+        <a class="btn" href="#run">Run it locally</a>
+        <a class="link" href="https://github.com/Theboss12k/RYNTARA">Read the source</a>
+      </div>
+    </div>
+    <figure class="hero-shot">
+      <div class="shot" data-zoom>
+        <video data-clip src="media/path-planner.mp4" poster="media/planner-validated.jpg" muted loop playsinline preload="metadata" aria-label="Path planner rejecting a route through a redzone and proposing a safe alternate"></video>
+      </div>
+      <figcaption><code>/plan</code><span>A route crosses a 50 m redzone. The planner rejects it and offers a safe alternate, which the operator accepts.</span></figcaption>
+    </figure>
+  </div>
+
+  <section id="pipeline">
+    <div class="wrap">
+      <div class="head" data-rise>
+        <h2>From a raw packet to an approved route</h2>
+        <p>Every vehicle talks differently. RYNTARA puts a small Python adapter in front of each protocol, so everything after it works with one schema.</p>
+      </div>
+      <ol class="rail" id="rail">
+        <li><h3>Vehicle</h3><p>Broadcasts telemetry over UDP in its own format, on its own port.</p></li>
+        <li><h3>Adapter</h3><p>A Python script bound to that port turns each packet into the shared schema. Only one adapter can hold a port.</p></li>
+        <li><h3>Ground station</h3><p>Spring Boot supervises the adapters, publishes parsed lines to Redis and keeps history in PostgreSQL.</p></li>
+        <li><h3>Fleet map</h3><p>The dashboard subscribes over WebSocket and draws every vehicle on a 3D MapLibre and deck.gl map.</p></li>
+        <li><h3>Planner</h3><p>New manifests are checked against redzones and live traffic. A conflicting route gets an A* alternate.</p></li>
+      </ol>
+
+      <div class="packets">
+        <div class="pkt" data-rise>
+          <h3>What the drone sends <span>· UDP 14555</span></h3>
+<pre>{
+  <span class="k">"header"</span>: "CUSTOM_PROPRIETARY_V2",
+  <span class="k">"uav_id"</span>: "OSLO-UAV-04",
+  <span class="k">"telemetry"</span>: {
+    <span class="k">"loc"</span>: [59.922153, 10.757846],
+    <span class="k">"alt_m"</span>: 122.8, <span class="k">"yaw"</span>: 124.4
+  },
+  <span class="k">"pwr"</span>: { <span class="k">"bat_pct"</span>: 98, <span class="k">"temp_c"</span>: 44.8 },
+  <span class="k">"velocity_kts"</span>: 16.6
+}</pre>
+        </div>
+        <div class="pkt" data-rise>
+          <h3>What the fleet sees <span>· after multiple_drones_adapter.py</span></h3>
+<pre>{
+  <span class="k">"vehicle_id"</span>: "OSLO-UAV-04",
+  <span class="k">"latitude"</span>: 59.922153,
+  <span class="k">"longitude"</span>: 10.757846,
+  <span class="k">"altitude"</span>: 122.8,
+  <span class="k">"battery_level"</span>: 98,
+  <span class="k">"heading_deg"</span>: 124.4
+}</pre>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <section id="operate">
+    <div class="wrap">
+      <div class="head" data-rise>
+        <h2>The operator's console</h2>
+        <p>A React dashboard for watching the fleet, planning routes and bringing new vehicles online.</p>
+      </div>
+
+      <div class="feature">
+        <div class="copy" data-rise>
+          <h3>Live fleet map</h3>
+          <p>Each registered vehicle shows its latest position, altitude, battery and heading as packets arrive. Tilt the map into 3D, size a danger zone from a vehicle's speed, trace its path, or jump to any coordinate.</p>
+        </div>
+        <figure data-rise>
+          <div class="shot">
+            <video data-clip src="media/fleet-live.mp4" poster="media/fleet-live.jpg" muted loop playsinline preload="none" aria-label="Fleet Orchestrator with live telemetry cards and a 3D map"></video>
+          </div>
+          <figcaption><code>/manage</code></figcaption>
+        </figure>
+      </div>
+
+      <div class="feature flip">
+        <div class="copy" data-rise>
+          <h3>History and replay</h3>
+          <p>Open a vehicle to follow it with a telemetry inspector. Scrub back through its stored path, then return to live.</p>
+        </div>
+        <figure data-rise>
+          <div class="shot">
+            <video data-clip src="media/vehicle-history.mp4" poster="media/vehicle-history.jpg" muted loop playsinline preload="none" aria-label="Single vehicle view with telemetry inspector and time scrubber"></video>
+          </div>
+          <figcaption><code>/vehicle/CUSTOM-DRONE-99</code></figcaption>
+        </figure>
+      </div>
+
+      <div class="feature">
+        <div class="copy" data-rise>
+          <h3>Route planning</h3>
+          <p>Drop a start, an end and any local redzones, then set speed, cruising altitude and safety bubble. The planner checks the manifest against stored redzones and every other vehicle's waypoints.</p>
+          <p><span class="swatch" style="background:var(--zone)"></span>rejected path &nbsp; <span class="swatch" style="background:var(--route)"></span>safe alternate</p>
+        </div>
+        <figure data-rise>
+          <div class="shot">
+            <img src="media/planner-validated.jpg" alt="Planner showing a rejected red path through a redzone and a green alternate route" loading="lazy" width="1800" height="1125">
+          </div>
+          <figcaption><code>/plan</code><span>The alternate comes with an expected arrival time.</span></figcaption>
+        </figure>
+      </div>
+
+      <div class="feature flip">
+        <div class="copy" data-rise>
+          <h3>Adapter Studio</h3>
+          <p>Write an adapter in the browser. Listen to the raw UDP stream on a port, run your parser against it, and see every parsed line checked against the fleet schema. A local Ollama model can draft the first version for you.</p>
+        </div>
+        <figure data-rise>
+          <div class="shot">
+            <video data-clip src="media/adapter-studio.mp4" poster="media/adapter-studio.jpg" muted loop playsinline preload="none" aria-label="Adapter Studio sniffing UDP packets and validating parsed output"></video>
+          </div>
+          <figcaption><code>/studio</code></figcaption>
+        </figure>
+      </div>
+
+      <div class="feature">
+        <div class="copy" data-rise>
+          <h3>Auto-discovery</h3>
+          <p>Pick an adapter and probe the network. RYNTARA lists the vehicles it hears that aren't registered yet. Name them, pick a category, register, and they appear on the map.</p>
+        </div>
+        <figure data-rise>
+          <div class="shot">
+            <video data-clip src="media/discovery.mp4" poster="media/discovery.jpg" muted loop playsinline preload="none" aria-label="Network probe detecting an unregistered vehicle and registering it"></video>
+          </div>
+          <figcaption><code>/add-vehicle</code></figcaption>
+        </figure>
+      </div>
+    </div>
+  </section>
+
+  <section id="phase">
+    <div class="wrap">
+      <div class="head" data-rise>
+        <h2>PHASE</h2>
+        <p>Physics-based Hierarchical Adaptive Spatial Evasion. Rather than solving every interaction as one global planning problem, PHASE spends more computation only as a conflict gets more serious. RYNTARA ships a derived version of the research algorithm.</p>
+      </div>
+      <div class="phase">
+        <div>
+          <ol class="stages" id="stages">
+            <li><b>Localized A* planning</b><span>Each vehicle plans inside a local frame that only includes nearby agents.</span></li>
+            <li><b>Conflict detection</b><span>Separation is checked against each vehicle's safety margin.</span></li>
+            <li><b>Priority-weighted evasion</b><span>Vehicles sidestep based on heading, conflict geometry, goal direction and priority.</span></li>
+            <li><b>Constraint resolution</b><span>An iterative correction removes overlaps left by discrete time steps.</span></li>
+            <li><b>Commit and replan</b><span>Positions are committed and A* replans from where each vehicle actually is.</span></li>
+          </ol>
+          <div class="formula" data-rise>
+            <span class="eq">W<sub>i</sub> = P<sub>i</sub> × V<sub>i</sub></span>
+            <p>Priority times velocity. A heavy, fast vehicle holds its line; a light one gives way.</p>
+          </div>
+        </div>
+        <div class="pin">
+          <figure>
+            <div class="shot square">
+              <video data-clip src="media/phase-sim.mp4" poster="media/phase-sim.jpg" muted loop playsinline preload="none" aria-label="Nineteen simulated vehicles routing around five cylindrical obstacles"></video>
+            </div>
+            <figcaption><span>Dashed lines are each vehicle's straight-line intent, rings are safety margins and diamonds mark evasions.</span></figcaption>
+          </figure>
+          <table class="runlog">
+            <caption>From the run above</caption>
+            <tbody>
+              <tr><td>Vehicles and obstacles</td><td>19 / 5</td></tr>
+              <tr><td>Reached their goal</td><td>19 of 19</td></tr>
+              <tr><td>Evasion events</td><td>157</td></tr>
+              <tr><td>Last arrival</td><td>51.8 s</td></tr>
+              <tr><td>Margin infractions</td><td>1 (7.94 m of 8.00 m)</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      <p class="note">Research reference: <a href="https://doi.org/10.5281/zenodo.22260336">DOI 10.5281/zenodo.22260336</a>. This implementation is for research and system development and makes no guarantee of collision-free operation without further validation.</p>
+    </div>
+  </section>
+
+  <section id="stack">
+    <div class="wrap">
+      <div class="head" data-rise>
+        <h2>What runs where</h2>
+      </div>
+      <div class="tablewrap" data-rise>
+        <table class="stack">
+          <tbody>
+            <tr><th scope="row">Dashboard</th><td>React 18, MapLibre GL, deck.gl, Monaco editor, STOMP over SockJS</td><td><code>fleet-dashboard/</code> · <code>:3000</code></td></tr>
+            <tr><th scope="row">Ground station</th><td>Spring Boot 4 on Java 17+, JPA with Hibernate Spatial, WebSocket broker, adapter process manager</td><td><code>src/main/java</code> · <code>:8080</code></td></tr>
+            <tr><th scope="row">Data</th><td>PostgreSQL + PostGIS for the fleet and for planning, Redis for live telemetry</td><td><code>:5432</code> · <code>:5433</code> · <code>:6379</code></td></tr>
+            <tr><th scope="row">Python</th><td>Vehicle adapters, the alternate-path planner and the PHASE simulator</td><td><code>Python_Files/</code> · <code>Algorithms/</code></td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  </section>
+
+  <section id="run">
+    <div class="wrap run">
+      <div>
+        <div class="head" data-rise style="margin-bottom:32px">
+          <h2>Run it locally</h2>
+          <p>You need Docker, JDK 17 to 21, Node.js and Python 3.13.</p>
+        </div>
+        <ol class="steps">
+          <li><b>Start the databases and Redis</b>
+<pre>docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=password -e POSTGRES_DB=fleet_db postgis/postgis:16-3.4
+docker run -d -p 5433:5432 -e POSTGRES_PASSWORD=postgres -e POSTGRES_DB=fleet_planning_db postgis/postgis:16-3.4
+docker run -d -p 6379:6379 redis:7</pre></li>
+          <li><b>Create the Python environment</b>
+<pre>python3.13 -m venv Python_Files/.venv
+Python_Files/.venv/bin/pip install numpy</pre></li>
+          <li><b>Start the ground station from the repository root</b>
+<pre>./mvnw spring-boot:run</pre><p>It starts every adapter listed in <code>adapter_mounts.json</code>.</p></li>
+          <li><b>Start the dashboard</b>
+<pre>cd fleet-dashboard &amp;&amp; npm install &amp;&amp; npm start</pre></li>
+          <li><b>Stream simulated vehicles</b>
+<pre>Python_Files/.venv/bin/python Python_Files/Python_Codes/mock_raw_data.py</pre><p>Four vehicles appear at <code>localhost:3000/manage</code>.</p></li>
+        </ol>
+      </div>
+      <figure class="pin" data-rise>
+        <div class="shot">
+          <img src="media/home.jpg" alt="RYNTARA portal with Auto-Discovery, RYNTARA Grid, Adapter Studio and Documentation" width="1800" height="1125">
+        </div>
+        <figcaption><code>/</code><span>The portal you land on.</span></figcaption>
+      </figure>
+    </div>
+  </section>
+</main>
+
+<footer>
+  <div class="wrap">
+    <img src="media/ryntara-logo-dark.svg" alt="Project RYNTARA" width="140" height="74">
+    <a href="https://github.com/Theboss12k/RYNTARA">github.com/Theboss12k/RYNTARA</a>
+  </div>
+</footer>
+
+<script>
+(() => {
+  const clips = [...document.querySelectorAll('video[data-clip]')];
+  clips.forEach((v) => {
+    const btn = document.createElement('button');
+    btn.className = 'toggle';
+    btn.type = 'button';
+    const sync = () => { btn.textContent = v.paused ? 'Play' : 'Pause'; };
+    btn.addEventListener('click', () => { v.dataset.user = '1'; v.paused ? v.play().catch(() => {}) : v.pause(); });
+    v.addEventListener('play', sync); v.addEventListener('pause', sync); sync();
+    v.parentElement.appendChild(btn);
+  });
+
+  if (matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+
+  // Play clips only while they are on screen.
+  if ('IntersectionObserver' in window) {
+    const io = new IntersectionObserver((entries) => entries.forEach(({ target: v, isIntersecting }) => {
+      if (v.dataset.user && v.paused) return;
+      if (isIntersecting) v.play().catch(() => {}); else v.pause();
+    }), { threshold: 0.3 });
+    clips.forEach((v) => io.observe(v));
+  }
+
+  // Scroll-linked motion: everything is computed from the element's position, every frame the page moves.
+  const clamp = (n) => Math.min(1, Math.max(0, n));
+  const rises = [...document.querySelectorAll('[data-rise]')];
+  const zooms = [...document.querySelectorAll('[data-zoom]')];
+  const rail = document.getElementById('rail');
+  const stops = rail ? [...rail.children] : [];
+  const stages = [...document.querySelectorAll('#stages li')];
+  let queued = false;
+
+  function update() {
+    queued = false;
+    const vh = innerHeight;
+    rises.forEach((el) => {
+      const top = el.getBoundingClientRect().top;
+      el.style.setProperty('--p', clamp((vh - top) / (vh * 0.4)).toFixed(3));
+    });
+    zooms.forEach((el) => {
+      const top = el.getBoundingClientRect().top;
+      el.style.setProperty('--z', clamp(1 - (top - vh * 0.15) / (vh * 0.6)).toFixed(3));
+    });
+    if (rail) {
+      const r = rail.getBoundingClientRect();
+      const fill = clamp((vh * 0.75 - r.top) / (r.height + vh * 0.3));
+      rail.style.setProperty('--fill', fill.toFixed(3));
+      stops.forEach((li, i) => li.classList.toggle('on', fill >= i / stops.length));
+    }
+    let active = -1;
+    stages.forEach((li, i) => { if (li.getBoundingClientRect().top < vh * 0.55) active = i; });
+    stages.forEach((li, i) => li.classList.toggle('on', i === active));
+  }
+  const queue = () => { if (!queued) { queued = true; requestAnimationFrame(update); } };
+  addEventListener('scroll', queue, { passive: true });
+  addEventListener('resize', queue);
+  update();
+})();
+</script>
+
+</body>
+</html>
