@@ -35,3 +35,21 @@ target/
 
 ### VS Code ###
 .vscode/
+
+### macOS ###
+.DS_Store
+__MACOSX/
+
+### Python ###
+__pycache__/
+*.pyc
+.venv/
+
+### Generated at runtime ###
+.temp_adapter_test.py
+resolved_paths.csv
+spline_path_*.csv
+multi_obstacle_spline_*.csv
+
+### Archives and local notes ###
+*.zip
