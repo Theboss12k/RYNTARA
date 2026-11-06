@@ -1,5 +1,7 @@
 # RYNTARA
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.24022438.svg)](https://doi.org/10.5281/zenodo.24022438)
+
 RYNTARA coordinates drones and rovers from one map. It is a vehicle-independent
 coordination and runtime safety framework: it takes telemetry in whatever format
 each vehicle speaks, shows the whole fleet live, and checks planned routes against
@@ -84,3 +86,8 @@ operation without further validation, and it is not certified for flight or road
 ## License
 
 [Apache License 2.0](LICENSE)
+
+## Citing RYNTARA
+
+If you use RYNTARA in your work, please cite it. GitHub's **Cite this repository** button gives APA and BibTeX from [`CITATION.cff`](CITATION.cff), and the DOI [10.5281/zenodo.24022438](https://doi.org/10.5281/zenodo.24022438) always resolves to the latest archived release on Zenodo.
+

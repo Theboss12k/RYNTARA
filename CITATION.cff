@@ -14,6 +14,14 @@ authors:
     family-names: Sriram
 version: 0.1.1-alpha
 date-released: 2026-11-07
+doi: 10.5281/zenodo.24022438
+identifiers:
+  - type: doi
+    value: 10.5281/zenodo.24022438
+    description: "All versions; resolves to the latest release"
+  - type: doi
+    value: 10.5281/zenodo.24022439
+    description: "The v0.1.1-alpha release"
 license: Apache-2.0
 repository-code: "https://github.com/Theboss12k/RYNTARA"
 url: "https://theboss12k.github.io/RYNTARA/"
