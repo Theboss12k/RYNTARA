@@ -1,0 +1,36 @@
+cff-version: 1.2.0
+message: "If you use RYNTARA in your work, please cite it as below."
+type: software
+title: "RYNTARA"
+abstract: >-
+  RYNTARA is a vehicle-independent coordination and runtime safety framework
+  for autonomous systems. It takes telemetry from drones and rovers in each
+  vehicle's own format, shows the whole fleet live on one map, and checks
+  planned routes against redzones and other traffic before they are approved,
+  proposing an alternate route when one conflicts. Multi-vehicle coordination
+  uses a derived version of PHASE.
+authors:
+  - given-names: Paramesh
+    family-names: Sriram
+version: 0.1.0
+date-released: 2026-11-06
+license: Apache-2.0
+repository-code: "https://github.com/Theboss12k/RYNTARA"
+url: "https://theboss12k.github.io/RYNTARA/"
+keywords:
+  - autonomous vehicles
+  - multi-vehicle coordination
+  - fleet management
+  - trajectory planning
+  - conflict detection
+  - runtime safety
+  - drones
+  - rovers
+references:
+  - type: software
+    title: "PHASE: Physics-based Hierarchical Adaptive Spatial Evasion"
+    authors:
+      - given-names: Paramesh
+        family-names: Sriram
+    doi: 10.5281/zenodo.22260336
+    repository-code: "https://github.com/Theboss12k/Autonomous_Algorithms"
